@@ -1,0 +1,9 @@
+cifar100_transformed/
+data_100/
+model_100/
+__pycache__/
+*.txt
+*.csv
+*.xlsx
+*.pth
+*.out
