@@ -15,13 +15,13 @@ if __name__ == "__main__":
 
     tasks = []
 
-    ratio = 0.001
-    while ratio < 0.005:
-        tasks.append([
+    ratio = 0.0002
+    while ratio < 0.01:
+        tasks.append(([
             rquan(ratio=ratio, encoding_1='int4'),
             hashq()
-        ])
+        ], 'ratio' + str(ratio)))
         ratio += 0.0002
     
-    for task in tasks:
-        main(task, 'one')
+    for task, key in tasks:
+        main(task, key)

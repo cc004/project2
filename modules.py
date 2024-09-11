@@ -85,14 +85,15 @@ for k, v in _quan_point.items():
 class qbase(modulebase):
 
     default_config = {
-        'scale_1_max': 1.2, # outlier
-        'scale_1_min': 0.05,
-        'scale_2_max': 1.2, # non-outlier
+        'scale_1_max': 1.1, # outlier
+        'scale_1_min': 0.1,
+        'scale_2_max': 1.1, # non-outlier
         'scale_2_min': 0.05,
         'scale_1_step': 0.05,
         'scale_2_step': 0.05,
         'encoding_1': 'int4',
         'encoding_2': 'int4',
+        'max_error_weight': 0
     }
     
     def __init__(self, **kwargs):
@@ -105,8 +106,8 @@ class qbase(modulebase):
         self.point_1 = torch.tensor(_quan_point[self.config['encoding_1']], device=self.device).float()
         self.point_2 = torch.tensor(_quan_point[self.config['encoding_2']], device=self.device).float()
         
-        self.point_1 /= self.point_1.max()
-        self.point_2 /= self.point_2.max()
+        self.point_1 /= self.point_1.abs().max()
+        self.point_2 /= self.point_2.abs().max()
         
         self.point_1_a = torch.tensor(_quan_point_arg[self.config['encoding_1']], device=self.device, dtype=torch.int16)
         self.point_2_a = torch.tensor(_quan_point_arg[self.config['encoding_2']], device=self.device, dtype=torch.int16)
@@ -119,6 +120,7 @@ class qbase(modulebase):
         
         self.scales = torch.stack([scale_1_repeated, scale_2_repeated], dim=1).reshape(1, -1, 2)
         self.all_scales = self.scale_1_count * self.scale_2_count
+        self.max_error_weight = self.config['max_error_weight']
     
     def get_qmask_(self, flattened_abs, scale_1, scale_2):
         return self.get_qmask_with_zero(flattened_abs, scale_1, scale_2)
@@ -145,7 +147,7 @@ class qbase(modulebase):
         
         size = flattened.numel()
         
-        batch = math.ceil(128 * 1024 * 1024 / size)
+        batch = math.ceil(512 * 1024 * 1024 / size)
         
         start = 0
         
@@ -183,13 +185,20 @@ class qbase(modulebase):
             #    encode_2
             #)
             
-            loss_min_sum = torch.sum((quan - flattened) ** 2, dim=0)
-            
+            loss = (quan - flattened) ** 2
             del quan
             
+            loss_min_mean = torch.mean(loss, dim=0)
+            loss_max = torch.max(loss, dim=0).values
+            
+            loss = loss_min_mean + loss_max * self.max_error_weight
             # print(f'loss_min_sum shape: {loss_min_sum.shape}')
             
-            loss_min = torch.min(loss_min_sum, dim=0)
+            del loss_min_mean, loss_max
+            
+            loss_min = torch.min(loss, dim=0)
+            
+            del loss
             
             if loss_min.values < g_min_mse[0]:
                 # print(f'indice: {loss_min.indices + start}')
@@ -197,7 +206,7 @@ class qbase(modulebase):
                 
             start = end
             
-            del loss_min, loss_min_sum
+            del loss_min
         
         min_mse = g_min_mse[0]
         min_index = g_min_mse[1]
@@ -439,7 +448,8 @@ class adderror(modulebase):
         
         cols = self.config['cols']
         rows = math.ceil(n / cols)
-
+        
+        '''
         flattened = (state['tensor'] / state['global_scale']).view(-1, 1)
         qmask = (torch.abs(flattened) > state['scale_2']).view(-1)
     
@@ -458,6 +468,12 @@ class adderror(modulebase):
         col_mask = col_sum > col_sum.topk(col_count).values.min()
 
         state['mask_cache'] = (row_mask, col_mask)
+        '''
+        
+        state['mask_cache'] = (
+            torch.ones(rows, device=self.device, dtype=torch.bool),
+            torch.ones(cols, device=self.device, dtype=torch.bool)
+        )
         
     def preprocess(self, state):
         
@@ -473,15 +489,15 @@ class adderror(modulebase):
         bit_total = bit_slice.numel()
         concentrate_bit = self.config['concentrate_bit']
 
-        qmask = state['qmask'].view(-1)
-        q_percent = qmask.float().mean().item()
+        # qmask = state['qmask'].view(-1)
+        # q_percent = qmask.float().mean().item()
         row_percent = self.config['row_percent']
         col_percent = self.config['col_percent']
-        err_mask_single = torch.rand((n, concentrate_bit), device=self.device) < error_percent * bit_total / concentrate_bit * (1 - row_percent - col_percent) / q_percent
-        err_mask_single *= qmask.view(-1, 1)
+        err_mask_single = torch.rand((n, concentrate_bit), device=self.device) < error_percent * bit_total / concentrate_bit * (1 - row_percent - col_percent)
+        # err_mask_single *= qmask.view(-1, 1)
         err_mask_single = torch.concat([torch.zeros((n, bit_total - concentrate_bit), device=self.device, dtype=torch.bool), err_mask_single], dim=1)
         
-        print(f'fault percent: {err_mask_single.float().mean()}, outlier percent: {q_percent}, outlier fault percent: {(err_mask_single * qmask.view(-1, 1)).float().mean()}')
+        # print(f'fault percent: {err_mask_single.float().mean()}, outlier percent: {0}, outlier fault percent: {0}')
         cols = self.config['cols']
         rows = math.ceil(n / cols)
 
@@ -1345,7 +1361,7 @@ class flower(hashmodule):
 
 class int4rquan(rquan):
     default_config = {
-        'ratio': 0.003,
+        'ratio': 0.001,
         'encoding_1': 'int4'
     }
 
@@ -1353,3 +1369,60 @@ class flintquan(sigmaq):
     default_config = {
         'encoding_1': 'flint'
     }
+
+class qpure(modulebase):
+
+    default_config = {
+        'encoding': 'int8',
+    }
+    
+    def __init__(self, **kwargs):
+        
+        super().__init__(**kwargs)
+        
+        self.point_1 = torch.tensor(_quan_point[self.config['encoding']], device=self.device).float()
+        self.point_1 /= self.point_1.max()
+        self.point_1_a = torch.tensor(_quan_point_arg[self.config['encoding']], device=self.device, dtype=torch.int16)
+    
+    def once(self, state):
+        
+        tensor: torch.Tensor = state['tensor']
+        
+        global_scale = torch.max(torch.abs(tensor))
+        
+        state['global_scale'] = global_scale
+    
+    def preprocess(self, state):
+        state['qmask'] = torch.zeros_like(state['tensor'], dtype=torch.bool)
+    
+    def process(self, state):
+        tensor: torch.Tensor = state['tensor']
+        flattened = (tensor / state['global_scale']).view(-1)
+        
+        encode = (torch.clamp(flattened + 1, 0, 2) * MULTIPLIER).long()
+        encode = self.point_1_a[encode]
+        state['qtensor'] = encode
+
+    def postprocess(self, state):
+        qtensor: torch.Tensor = state['qtensor']
+        qtensor_capped1 = torch.clamp(qtensor, 0, self.point_1.shape[0] - 1)
+        quan = self.point_1[qtensor_capped1.long()]
+        state['tensor'] = quan.view_as(state['tensor']) * state['global_scale']
+
+class int8wesco(wesco_v2_legacy):
+    default_config = {
+        'encoding': [
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            [3, 2, 1, 0, 7, 6, 5, 4],
+            [2, 3, 0, 1, 6, 7, 4, 5],
+            [1, 0, 3, 2, 5, 4, 7, 6],
+            [4, 5, 6, 7, 0, 1, 2, 3],
+            [7, 6, 5, 4, 3, 2, 1, 0],
+            [6, 7, 4, 5, 2, 3, 0, 1],
+            [5, 4, 7, 6, 1, 0, 3, 2]
+        ],
+        'col': 64,
+        'bit_width': 8
+    }
+
+        

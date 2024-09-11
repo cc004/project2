@@ -161,12 +161,13 @@ def hook_llama(layer: LlamaSdpaAttention, processor):
     
     layer.forward = forward
 
+kwargs = {"torch_dtype": torch.float16, 'token': token}
+eval_tasks = "piqa,arc_challenge,boolq"
+    
 def init(model_name, log_name):
     global eval_tasks, model, tokenizer, g_model_name, log, org_sd
     
     # model_name = 'bigscience/bloomz-7b1'
-    eval_tasks = "piqa,arc_challenge,boolq"
-    kwargs = {"torch_dtype": torch.float16, 'token': token}
     tokenizer_kwargs = {
         "use_fast": True,
         "revision": "main",
@@ -244,7 +245,7 @@ def main(modules, cacheKey):
 
     print_task(modules)
     
-    
+    '''
     for idx, layer in enumerate(model.base_model.layers):
         layer: LlamaDecoderLayer
         assert type(layer) is LlamaDecoderLayer
@@ -252,6 +253,7 @@ def main(modules, cacheKey):
         name = f'attention_{idx}'
         # hook_llama(layer.self_attn, partial(do_quantize, modules=modules, name=name, idx=idx))
         hook_llama(layer.self_attn, partial(save_attn, name=name, idx=idx))
+    '''
     
     for name, m in model.named_modules():
         if 'lm_head' in name:

@@ -2,11 +2,7 @@ import os
 os.environ["http_proxy"] = "http://127.0.0.1:7890" 
 os.environ["https_proxy"] = "http://127.0.0.1:7890"
 os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
-
-# 删除加错误时候的concentrate bit
-# 看看错误为什么影响这么大
-# 能不能跑13b？
-# kv乘起来直接加错误
+os.chdir('..')
 
 from runner import init, main
 from modules import *
@@ -19,7 +15,7 @@ if __name__ == "__main__":
     # model_name = 'gpt2-xl'
     model_name = 'meta-llama/Meta-Llama-3-8B'
 
-    init(model_name, 'fig4.2.1.txt')
+    init(model_name, 'wesco_col32.txt')
 
     tasks = []
 
@@ -29,9 +25,9 @@ if __name__ == "__main__":
 
     for err in errs:
         tasks.append([
-            int4rquan(),
-            hashq(),
-            adderror(error_percent=err)
+            int8quan(),
+            adderror(error_percent=err),
+            wesco_v2_col(col=128)
         ])
     
     for _ in range(10):
